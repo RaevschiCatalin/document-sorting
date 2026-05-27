@@ -1,0 +1,4 @@
+Invoice #9001
+Vendor: ACME Corporation
+Amount due: 1250 USD
+Payment terms: Net 30

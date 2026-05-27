@@ -1,0 +1,57 @@
+input_dir: sample_input
+output_dir: sample_output
+report_path: reports/classification_report.jsonl
+manifest_path: reports/processed_manifest.jsonl
+
+action: copy  # copy | move
+low_confidence_threshold: 0.70
+interactive: false
+
+ollama:
+  base_url: http://localhost:11434
+  model: qwen3:14b
+  timeout_seconds: 60
+
+known_companies:
+  - acme
+  - globex
+  - initech
+
+company_aliases:
+  acme:
+    - ACME
+    - Acme Corp
+    - ACME Corporation
+    - ACME Ltd
+  globex:
+    - Globex
+    - Globex Industries
+    - Globex Corporation
+  initech:
+    - Initech
+    - Initech LLC
+    - Initrode/Initech
+
+allowed_doc_types:
+  - contracts
+  - nda
+  - financial
+  - unknown
+
+ocr:
+  enabled: false
+  min_text_chars_before_ocr: 100
+
+text:
+  max_chars: 8000
+
+logging:
+  level: INFO
+  file_path: reports/docsort.log
+  error_file_path: reports/docsort_errors.log
+  rotation: 1 MB
+  retention: 7 days
+
+processing:
+  max_files_per_scan:
+  high_confidence_rule_threshold: 0.80

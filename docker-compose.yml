@@ -1,0 +1,40 @@
+services:
+  ollama:
+    image: ollama/ollama:0.5.7
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  docsort:
+    build: .
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ./sample_input:/app/sample_input
+      - ./sample_output:/app/sample_output
+      - ./reports:/app/reports
+      - ./config.docker.yaml:/app/config.yaml:ro
+    command: ["python", "-m", "docsort.main", "watch", "--config", "config.yaml", "--interval", "300"]
+
+  ui:
+    build: .
+    depends_on:
+      - docsort
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./sample_input:/app/sample_input
+      - ./sample_output:/app/sample_output
+      - ./reports:/app/reports
+      - ./config.docker.yaml:/app/config.yaml:ro
+    command: ["python", "-m", "docsort.ui"]
+
+volumes:
+  ollama_data:

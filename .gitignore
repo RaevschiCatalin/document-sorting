@@ -181,6 +181,18 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+# Local document sorting runtime files
+config.yaml
+reports/*.jsonl
+reports/*.json
+reports/*.log
+sample_input/auto_demo_*
+sample_input/ui_demo_*
+sample_input/live_polling_*
+sample_input/manual_polling_check/
+sample_output/*
+!sample_output/.gitkeep
+
 # PyCharm
 #   JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #   be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

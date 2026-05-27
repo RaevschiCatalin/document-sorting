@@ -1,0 +1,9 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+reports/*.jsonl
+reports/*.log
+sample_output/*
+config.yaml
