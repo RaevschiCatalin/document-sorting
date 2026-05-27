@@ -1,34 +1,86 @@
 # AI-Assisted Document Sorting
 
-Near-production-ready proof-of-concept for sorting incoming business documents
-by company and document type using deterministic rules plus a local Ollama model.
+Document sorting workflow. It recursively scans incoming files, extracts text and metadata, classifies company and document type, and routes each file into a predictable folder structure. Low-confidence items are sent to review instead of being sorted automatically.
 
-The workflow scans `sample_input/`, extracts document context, classifies files,
-and copies them into:
+## What It Does
+
+- Recursively scans `sample_input/`
+- Supports `.txt`, `.md`, `.csv`, `.pdf`, `.docx`, and common image files
+- Extracts text, metadata, and optional OCR
+- Uses deterministic rules first, then Ollama for ambiguous cases
+- Copies or moves files into `sample_output/{company}/{doc_type}/`
+- Routes uncertain files to `sample_output/pending_review/`
+- Writes JSONL audit/report files plus a summary JSON
+- Skips already processed files using SHA-256 plus file size
+- Exposes a simple Gradio review UI
+
+## Requirement Coverage
+
+| Requirement | Implementation |
+| --- | --- |
+| Recursive scan | `docsort.scanner.scan_once()` uses `Path.rglob("*")` |
+| Every 5 minutes | `docsort.main watch --interval 300` and the UI scan timer |
+| File detection | `docsort.extractor` handles text, PDF, DOCX, and images |
+| OCR | Optional Tesseract OCR for images and low-text PDFs |
+| Classification inputs | Filename, metadata, extracted text, and rule hints |
+| Copy/move | `docsort.organizer.organize_file()` |
+| Report | `reports/classification_report.jsonl` and `classification_summary.json` |
+| Low confidence confirmation | CLI interactive mode and the UI pending-review queue |
+| Docker | `docker compose up --build` |
+
+## Project Layout
 
 ```text
-sample_output/{company}/{doc_type}/filename
+docsort/
+  main.py         CLI scan/watch commands
+  scanner.py      recursive scan, dedupe, reporting
+  extractor.py    PDF/DOCX/text/image extraction and OCR
+  classifier.py   rule hints, Ollama prompt, validation, fallback
+  organizer.py    copy/move and review routing
+  ui.py           Gradio review dashboard
+  demo_files.py   5-file demo generator for the UI
+  config.py       YAML loading and path resolution
+  models.py       Pydantic models
+  logging.py      Loguru setup
+generate_test_files.py  one-shot 20-file fixture generator
+sample_input/             incoming fixtures
+sample_output/            sorted files and review queue
+reports/                  JSONL reports and logs
 ```
 
-Low-confidence, unknown, or conflicting files are routed to
-`sample_output/pending_review/` for manual review.
+## Sample Input / Output
 
-## Features
+Representative incoming files:
 
-- Recursive scan and watch mode
-- Batch limit support with `--max-files`
-- TXT, CSV, Markdown, PDF, DOCX, and image support
-- Optional OCR through Tesseract
-- Hybrid rules + Ollama classification
-- qwen3:14b primary model with rule fallback
-- Structured JSON validation with Pydantic
-- SHA-256 + file size duplicate detection
-- JSONL audit report and JSON summary statistics
-- Loguru console and rotating file logs
-- Gradio review UI
-- Dockerfile and Docker Compose with Ollama
+```text
+sample_input/
+  acme_invoice_clear.txt
+  globex_nda_clear.txt
+  ambiguous_review_needed.txt
+  unknown_minimal_review.txt
+```
 
-## How To Run Locally
+Representative output after a scan:
+
+```text
+sample_output/
+  acme/financial/acme_invoice_clear.txt
+  globex/nda/globex_nda_clear.txt
+  pending_review/ambiguous_review_needed.txt
+  pending_review/unknown_minimal_review.txt
+```
+
+The repo also includes larger generated examples under `sample_output/` from demo runs.
+
+## Configuration
+
+- `config.example.yaml` is the local starting point and keeps `qwen3:14b`
+- `config.docker.yaml` is mounted by Compose and uses `qwen2.5:7b`
+- `action: copy` avoids destructive behavior during testing
+- `interactive: true` enables confirmation prompts in the CLI
+- `ocr.enabled: true` turns on OCR
+
+## Local Run
 
 ```bash
 python -m venv .venv
@@ -47,10 +99,10 @@ Watch every 5 minutes:
 python -m docsort.main watch --config config.yaml --interval 300
 ```
 
-Run a limited batch:
+Ask for confirmation on low-confidence files:
 
 ```bash
-python -m docsort.main scan --config config.yaml --max-files 5
+python -m docsort.main scan --config config.yaml --interactive
 ```
 
 Launch the review UI:
@@ -61,271 +113,102 @@ python -m docsort.ui
 
 Then open `http://localhost:7860`.
 
-## Configuration
-
-Key settings in `config.yaml`:
-
-```yaml
-action: copy
-low_confidence_threshold: 0.70
-interactive: false
-
-ollama:
-  base_url: http://localhost:11434
-  model: qwen3:14b
-  timeout_seconds: 20
-
-processing:
-  max_files_per_scan:
-  high_confidence_rule_threshold: 0.80
-
-logging:
-  level: INFO
-  file_path: reports/docsort.log
-```
-
-Copy is the default action to avoid destructive behavior during testing. Set
-`action: move` only after validating the workflow on representative data.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  A["Incoming folder"] --> B["Scanner"]
-  B --> C["Extractor"]
-  C --> D["Rule hints"]
-  D --> E{"High confidence?"}
-  E -- yes --> F["Validated classification"]
-  E -- no --> G["Ollama qwen3:14b"]
-  G --> H["Pydantic validation"]
-  H --> F
-  F --> I{"Needs review?"}
-  I -- no --> J["company/doc_type folder"]
-  I -- yes --> K["pending_review"]
-  F --> L["JSONL report + manifest + summary"]
-  K --> M["Gradio review UI"]
-  M --> J
-```
-
-```text
-docsort/
-  main.py        CLI commands
-  ui.py          Gradio review UI
-  config.py      YAML loading and path resolution
-  models.py      Pydantic models
-  extractor.py   Text, metadata, and optional OCR extraction
-  classifier.py  Rules, Ollama prompt, validation, fallback
-  organizer.py   Folder naming and copy/move behavior
-  scanner.py     Batch orchestration, manifest, reporting
-  logging.py     Loguru setup
-```
-
-Processing flow:
-
-1. Recursively scan input files.
-2. Skip already processed files by SHA-256 plus size.
-3. Extract filename, metadata, MIME type, text, and optional OCR text.
-4. Build deterministic rule hints.
-5. Accept high-confidence rule matches immediately.
-6. Send ambiguous cases to Ollama using constrained JSON output.
-7. Validate model output and force review for weak/unknown/conflicting results.
-8. Copy/move to target folder or `pending_review/`.
-9. Append JSONL audit row, manifest row, summary JSON, and logs.
-
-Performance note: clear documents are classified by rules without calling
-`qwen3:14b`. This avoids slow local inference for obvious invoices, NDAs,
-contracts, and known-company documents while preserving the LLM path for
-ambiguous cases.
-
-## AI Approach
-
-This project intentionally uses a hybrid approach rather than a pure LLM
-classifier.
-
-Rules handle obvious cases quickly and deterministically. Ollama is reserved for
-ambiguous documents where filename, metadata, and extracted text need judgment.
-That keeps the system faster and more reliable with local models such as
-`qwen3:14b`, which can be accurate but slow.
-
-The model receives:
-
-- filename
-- extension and MIME type
-- metadata
-- extracted text excerpt
-- rule hints
-- known company list
-- allowed document types
-
-The model must return constrained JSON:
-
-```json
-{
-  "company_name": "acme",
-  "doc_type": "nda",
-  "confidence": 0.92,
-  "reasoning": "Filename and text identify ACME and NDA terms.",
-  "needs_review": false
-}
-```
-
-Invalid or slow Ollama responses fall back to rule hints and require review.
-
-Company detection uses both canonical names and aliases:
-
-```yaml
-company_aliases:
-  acme:
-    - ACME
-    - Acme Corp
-    - ACME Corporation
-```
-
-Aliases are normalized before matching, so casing, separators, and common
-special characters are handled consistently.
-
-## Reports
-
-Generated files:
-
-- `reports/classification_report.jsonl`: one audit row per processed file
-- `reports/processed_manifest.jsonl`: duplicate/processed-file manifest
-- `reports/classification_summary.json`: summary stats from latest scan
-- `reports/docsort.log`: rotating application log
-- `reports/docsort_errors.log`: errors only
-
-Example report row:
-
-```json
-{"company_name":"acme","doc_type":"financial","confidence":0.9,"needs_review":false}
-```
-
-## Review UI
-
-The Gradio UI provides:
-
-- Latest summary stats
-- Recent processed file table
-- Pending review queue
-- Run Scan button
-- Manual approval/reclassification into company/type folders
-
-Gradio was chosen because it gives a useful review dashboard with very little
-custom frontend code. For this take-home, that keeps attention on the document
-pipeline while still providing a clean operator experience.
-
-Suggested screenshots for submission:
-
-- `docs/screenshots/dashboard.png`: dashboard with metrics
-- `docs/screenshots/pending-review.png`: pending review queue
-- `docs/screenshots/output-folders.png`: generated folder structure
-
-## How To Run With Docker
-
-Build and run the app stack:
+## Docker
 
 ```bash
 docker compose up --build
 ```
 
-The compose file starts:
+The compose stack starts:
 
 - `ollama`
-- `docsort` watcher
-- `ui` on port `7860`
+- `docsort` watcher every 5 minutes
+- `ui` on `http://localhost:7860`
 
-Pull the model inside the Ollama container if needed:
+Docker mounts `config.docker.yaml` as `config.yaml`. The Docker config now uses `qwen2.5:7b` because the bundled Ollama image is `0.5.7`, which does not support pulling `qwen3:14b`.
 
-```bash
-docker compose exec ollama ollama pull qwen3:14b
-```
-
-## OCR
-
-OCR is optional and disabled by default.
-
-To enable it:
-
-```yaml
-ocr:
-  enabled: true
-```
-
-Install the system binary locally:
+If needed, pull the model inside the container:
 
 ```bash
-sudo apt install tesseract-ocr
+docker compose exec ollama ollama pull qwen2.5:7b
 ```
 
-OCR is used for images and for low-text PDFs. For scanned PDFs, only the first
-page is OCRed to keep runtime predictable.
+The UI also includes:
 
-## Test Data
+- auto scan every 5 minutes
+- generate 5 demo files every 30 seconds
 
-Generate 20 diverse files:
+## Review Flow
 
-```bash
-python generate_test_files.py
-```
+- Non-interactive CLI scans route low-confidence files to `pending_review/`
+- Interactive CLI mode prompts to accept, override, refuse, or defer
+- The UI shows pending files, previews their content, and allows reclassification
 
-The generator creates PDFs, DOCX files, TXT/CSV files, and images covering:
+## Demo Data
 
-- `contracts`
-- `nda`
-- `financial`
-- `unknown`
-- known companies: `acme`, `globex`, `initech`
-- unknown companies
-- ambiguous low-confidence cases
-- one Romanian contract sample
+- `generate_test_files.py` recreates `sample_input/` with 20 mixed fixtures across PDFs, DOCX, text, CSV, and images
+- `docsort/demo_files.py` powers the UI demo toggle and creates 5 fresh incoming files per batch
 
-## Test Results
+## Screenshot
 
-Latest local run against the generated 20-file dataset:
+![Document Sorting Review](docs/screenshots/document-sorting-review.png)
 
-| Metric | Result |
-| --- | ---: |
-| Processed files | 20 |
-| Company accuracy | 20/20 |
-| Document type accuracy | 20/20 |
-| Exact classification accuracy | 20/20 |
-| Auto-classified | 12 |
-| Routed to pending review | 8 |
-| Extraction errors | 0 |
+The dashboard shows processed files, pending review items, visual previews, and manual reclassification controls.
 
-The 8 review items are intentional low-confidence or unknown cases such as
-conflicting labels, unknown companies, minimal-text files, and unclear forwarded
-documents.
+![Pending Review](docs/screenshots/pending-review.png)
 
-## Production Considerations
+The review state shows the pending queue, preview panel, and approve/reclassify controls.
 
-Close to production-ready:
+## Reports
 
-- clear module boundaries
-- structured config
-- resilient scan loop
-- local privacy-preserving LLM integration
-- deterministic fallback path
-- duplicate detection
-- audit/report artifacts
-- review workflow
-- containerization
+- `reports/classification_report.jsonl`: one audit row per processed file
+- `reports/processed_manifest.jsonl`: duplicate/processed-file manifest
+- `reports/classification_summary.json`: summary stats from the latest scan
+- `reports/docsort.log`: rotating application log
+- `reports/docsort_errors.log`: errors only
 
-Still PoC-level:
+## Pipeline
 
-- no authentication on the review UI
-- JSONL files instead of a transactional database
-- no concurrent workers
-- model confidence is heuristic, not calibrated
-- no robust company alias registry
-- no deployment monitoring or alerting
+1. Scan `sample_input/` recursively.
+2. Skip files already seen in the manifest.
+3. Extract text, metadata, and optional OCR.
+4. Build deterministic rule hints.
+5. Auto-accept high-confidence rule matches.
+6. Call Ollama for ambiguous cases.
+7. Normalize the result and route the file.
+8. Append the report row and summary stats.
+
+## Validation
+
+- `docker compose up --build`
+- `docker compose exec ollama ollama pull qwen2.5:7b`
+- `docker compose exec docsort python -m docsort.main scan --config config.yaml`
+- `curl http://localhost:7860`
+
+Observed result from the Docker stack:
+
+- `sample_input/test_llm_file.txt` -> `sample_output/globex/nda/test_llm_file.txt`
+- `sample_input/test_new_file.txt` -> `sample_output/pending_review/test_new_file.txt` before the model pull
+
+## AI Approach
+
+- Rules extract strong signals from filename, metadata, and text
+- Clear cases bypass the model
+- Ambiguous cases go to Ollama with a strict JSON-only prompt
+- Pydantic validates the model output and normalizes company aliases
+- Low-confidence, unknown, or conflicting results go to review
 
 ## Tradeoffs
 
-- Polling is used instead of filesystem events because the task asks for a
-  periodic scan.
-- JSONL is easier to inspect than SQLite for a take-home demo.
-- High-confidence rules bypass Ollama to avoid slow local inference on obvious
-  cases.
-- Unknown or conflicting cases prefer review over overconfident sorting.
-- Docker support is included, but local Python remains the fastest demo path.
+- Polling every 5 minutes instead of filesystem events keeps the behavior predictable and matches the task
+- JSONL instead of a database keeps the submission simple and inspectable
+- Rules-first routing reduces model calls and latency for obvious files
+- A review queue is safer than forcing a guess on uncertain documents
+
+## Limitations
+
+- Single-process sequential scanning
+- Confidence is heuristic, not calibrated
+- OCR is optional and off by default
+- No embeddings or vector index yet
+- Docker is pinned to Ollama 0.5.7, so the compose stack uses `qwen2.5:7b`
